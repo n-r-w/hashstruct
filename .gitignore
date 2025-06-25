@@ -1,0 +1,3 @@
+*.test
+.augment-guidelines
+.DS_Store
