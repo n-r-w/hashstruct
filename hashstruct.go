@@ -32,6 +32,7 @@ import (
 //	    UUID     string   `hash:"ignore"`
 //	    Tags     []string `hash:"set"`
 //	    Created  time.Time `hash:"string"`
+//	    Updated  time.Time `hash:"utc"`
 //	}
 //
 // The available tag values are:
@@ -45,6 +46,10 @@ import (
 //   - "string" - The field will be hashed as a string using its String() method.
 //     This only works when the field implements fmt.Stringer. This is particularly
 //     useful for types like time.Time.
+//
+//   - "utc" - The field will be converted to UTC before hashing. This only works
+//     for time.Time fields. This is useful when you want times in different
+//     timezones that represent the same moment to produce the same hash.
 func Hash(v any, options ...Option) ([]byte, error) {
 	// Create default config
 	cfg := defaultConfig()
@@ -98,6 +103,7 @@ const (
 	tagString = "string"
 	tagSet    = "set"
 	tagDash   = "-"
+	tagUTC    = "utc"
 )
 
 var timeType = reflect.TypeOf(time.Time{}) //nolint:gochecknoglobals // ok
@@ -385,6 +391,23 @@ func (w *walker) processStructField(
 
 	if w.ignorezerovalue && innerV.IsZero() {
 		return nil, false, nil
+	}
+
+	// if utc is set, convert time.Time to UTC
+	if tag == tagUTC {
+		if innerV.Type() != timeType {
+			// We only show this error if the tag explicitly
+			// requests UTC conversion.
+			return nil, false, &NotTimeError{
+				Field: v.Type().Field(i).Name,
+			}
+		}
+		timeVal, ok := innerV.Interface().(time.Time)
+		if !ok {
+			return nil, false, fmt.Errorf("expected time.Time but got %T", innerV.Interface())
+		}
+		// Convert to UTC and replace the value
+		innerV = reflect.ValueOf(timeVal.UTC())
 	}
 
 	// if string is set, use the string value
