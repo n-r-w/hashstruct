@@ -103,6 +103,7 @@ type User struct {
     Email    string    `hash:"-"`       // Alternative way to ignore a field
     Tags     []string  `hash:"set"`     // Treat this slice as an unordered set
     Created  time.Time `hash:"string"`  // Use the String() method for hashing
+    Updated  time.Time `hash:"utc"`     // Convert to UTC before hashing
 }
 ```
 
@@ -164,6 +165,31 @@ type Event struct {
 
 **Note:** If a field has the `string` tag but doesn't implement `fmt.Stringer`, the Hash function will return a `NotStringerError`.
 
+#### `utc`
+
+Converts `time.Time` fields to UTC before hashing. This ensures that times representing the same moment but in different timezones produce the same hash.
+
+```go
+type Event struct {
+    Name      string
+    Timestamp time.Time `hash:"utc"` // Converts to UTC before hashing
+}
+
+// These will produce the same hash:
+utc := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
+est := utc.In(time.FixedZone("EST", -5*3600)) // Same moment, different timezone
+
+event1 := Event{Name: "Meeting", Timestamp: utc}
+event2 := Event{Name: "Meeting", Timestamp: est}
+```
+
+**Use cases:**
+- When you want timezone-independent hashing of timestamps
+- Comparing events that may be recorded in different timezones
+- Ensuring consistent hashing across systems in different regions
+
+**Note:** If a field has the `utc` tag but is not of type `time.Time`, the Hash function will return a `NotTimeError`.
+
 ### Advanced Examples
 
 #### Combining Tags with Options
@@ -174,7 +200,8 @@ type Product struct {
     Name        string
     Categories  []string  `hash:"set"`
     CreatedAt   time.Time `hash:"string"`
-    UpdatedAt   time.Time `hash:"ignore"`
+    UpdatedAt   time.Time `hash:"utc"`
+    DeletedAt   time.Time `hash:"ignore"`
 }
 
 // Hash with custom options

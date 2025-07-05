@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cespare/xxhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -323,6 +324,102 @@ func TestHash_stringTagError(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestHash_utcTag(t *testing.T) {
+	// Test UTC conversion functionality
+	type TestUTC struct {
+		Name string
+		Time time.Time `hash:"utc"`
+	}
+
+	// Create the same moment in different timezones
+	utc := time.Now()
+	est := utc.In(time.FixedZone("EST", -5*3600))           // UTC-5
+	pst := utc.In(time.FixedZone("PST", -8*3600))           // UTC-8
+	tunix := time.Unix(utc.Unix(), int64(utc.Nanosecond())) // unix timestamp with nanosecond precision
+
+	// All these should produce the same hash because they represent the same moment
+	test1 := TestUTC{Name: "event", Time: utc}
+	test2 := TestUTC{Name: "event", Time: est}
+	test3 := TestUTC{Name: "event", Time: pst}
+	test4 := TestUTC{Name: "event", Time: tunix}
+
+	hash1, err := Hash(test1)
+	require.NoError(t, err)
+
+	hash2, err := Hash(test2)
+	require.NoError(t, err)
+
+	hash3, err := Hash(test3)
+	require.NoError(t, err)
+
+	hash4, err := Hash(test4)
+	require.NoError(t, err)
+
+	// All hashes should be equal
+	assert.Equal(t, hash1, hash2, "UTC and EST times should produce same hash")
+	assert.Equal(t, hash1, hash3, "UTC and PST times should produce same hash")
+	assert.Equal(t, hash2, hash3, "EST and PST times should produce same hash")
+	assert.Equal(t, hash1, hash4, "UTC and no location times should produce same hash")
+
+	// Test with different moments - should produce different hashes
+	differentTime := utc.Add(time.Hour)
+	test5 := TestUTC{Name: "event", Time: differentTime}
+
+	hash5, err := Hash(test5)
+	require.NoError(t, err)
+
+	assert.NotEqual(t, hash1, hash5, "Different times should produce different hashes")
+}
+
+func TestHash_utcTagError(t *testing.T) {
+	// Test error when utc tag is applied to non-time.Time field
+	type TestBadUTC struct {
+		Name     string
+		BadField string `hash:"utc"`
+	}
+
+	type TestBadUTC2 struct {
+		Name     string
+		BadField int `hash:"utc"`
+	}
+
+	cases := []struct {
+		Test  any
+		Field string
+	}{
+		{
+			TestBadUTC{Name: "foo", BadField: "bar"},
+			"BadField",
+		},
+		{
+			TestBadUTC2{Name: "foo", BadField: 42},
+			"BadField",
+		},
+	}
+
+	for _, tc := range cases {
+		_, err := Hash(tc.Test)
+		require.Error(t, err, "Should return error for non-time.Time field with utc tag")
+
+		var notTimeErr *NotTimeError
+		require.ErrorAs(t, err, &notTimeErr, "Should return NotTimeError")
+		assert.Equal(t, tc.Field, notTimeErr.Field, "Error should reference correct field")
+	}
+}
+
+func TestHash_utcTagWithZeroTime(t *testing.T) {
+	// Test UTC tag with zero time
+	type TestUTCZero struct {
+		Name string
+		Time time.Time `hash:"utc"`
+	}
+
+	test := TestUTCZero{Name: "test", Time: time.Time{}}
+
+	_, err := Hash(test)
+	require.NoError(t, err, "Should handle zero time without error")
 }
 
 func TestHash_equalNil(t *testing.T) {
@@ -1120,7 +1217,7 @@ func TestHash_customHasherSizes(t *testing.T) {
 	assert.Len(t, hashSHA256, 32, "SHA256 should produce 32-byte hash")
 
 	// Test with sha256 (default - 32 bytes)
-	hashXXHash, err := Hash(testData)
+	hashXXHash, err := Hash(testData, WithHasher(xxhash.New()))
 	require.NoError(t, err)
 	assert.Len(t, hashXXHash, 8, "xxhash should produce 8-byte hash")
 
@@ -1134,7 +1231,7 @@ func TestHash_customHasherSizes(t *testing.T) {
 	assert.False(t, bytes.Equal(hashSHA256, hashSHA512), "SHA256 and SHA512 should produce different results")
 
 	// Test consistency - same hasher should produce same result
-	hashXXHash2, err := Hash(testData)
+	hashXXHash2, err := Hash(testData, WithHasher(xxhash.New()))
 	require.NoError(t, err)
 	assert.True(t, bytes.Equal(hashXXHash, hashXXHash2), "Same hasher should produce consistent results")
 }
