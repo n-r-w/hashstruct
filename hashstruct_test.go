@@ -334,14 +334,16 @@ func TestHash_utcTag(t *testing.T) {
 	}
 
 	// Create the same moment in different timezones
-	utc := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
-	est := utc.In(time.FixedZone("EST", -5*3600)) // UTC-5
-	pst := utc.In(time.FixedZone("PST", -8*3600)) // UTC-8
+	utc := time.Now()
+	est := utc.In(time.FixedZone("EST", -5*3600))           // UTC-5
+	pst := utc.In(time.FixedZone("PST", -8*3600))           // UTC-8
+	tunix := time.Unix(utc.Unix(), int64(utc.Nanosecond())) // unix timestamp with nanosecond precision
 
 	// All these should produce the same hash because they represent the same moment
 	test1 := TestUTC{Name: "event", Time: utc}
 	test2 := TestUTC{Name: "event", Time: est}
 	test3 := TestUTC{Name: "event", Time: pst}
+	test4 := TestUTC{Name: "event", Time: tunix}
 
 	hash1, err := Hash(test1)
 	require.NoError(t, err)
@@ -352,19 +354,23 @@ func TestHash_utcTag(t *testing.T) {
 	hash3, err := Hash(test3)
 	require.NoError(t, err)
 
+	hash4, err := Hash(test4)
+	require.NoError(t, err)
+
 	// All hashes should be equal
 	assert.Equal(t, hash1, hash2, "UTC and EST times should produce same hash")
 	assert.Equal(t, hash1, hash3, "UTC and PST times should produce same hash")
 	assert.Equal(t, hash2, hash3, "EST and PST times should produce same hash")
+	assert.Equal(t, hash1, hash4, "UTC and no location times should produce same hash")
 
 	// Test with different moments - should produce different hashes
 	differentTime := utc.Add(time.Hour)
-	test4 := TestUTC{Name: "event", Time: differentTime}
+	test5 := TestUTC{Name: "event", Time: differentTime}
 
-	hash4, err := Hash(test4)
+	hash5, err := Hash(test5)
 	require.NoError(t, err)
 
-	assert.NotEqual(t, hash1, hash4, "Different times should produce different hashes")
+	assert.NotEqual(t, hash1, hash5, "Different times should produce different hashes")
 }
 
 func TestHash_utcTagError(t *testing.T) {
