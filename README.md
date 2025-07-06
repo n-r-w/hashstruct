@@ -90,6 +90,54 @@ func main() {
 }
 ```
 
+## Configuration Options
+
+The `Hash` function accepts optional configuration parameters using the functional options pattern:
+
+### `WithHasher(h hash.Hash)`
+Sets a custom hash function. Default is SHA256.
+```go
+import "crypto/sha512"
+hash, err := hashstruct.Hash(data, hashstruct.WithHasher(sha512.New()))
+```
+
+### `WithTagName(name string)`
+Changes the struct tag name from default "hash" to a custom name.
+```go
+type User struct {
+    ID int64 `myhash:"ignore"`
+}
+hash, err := hashstruct.Hash(user, hashstruct.WithTagName("myhash"))
+```
+
+### `WithZeroNil(bool)`
+Treats nil pointers equal to zero values of the pointed type.
+```go
+// nil *int and int(0) will produce the same hash
+hash, err := hashstruct.Hash(data, hashstruct.WithZeroNil(true))
+```
+
+### `WithIgnoreZeroValue(bool)`
+Ignores fields with zero values (0, "", nil, etc.) in hash calculation.
+```go
+// Only non-zero fields affect the hash
+hash, err := hashstruct.Hash(data, hashstruct.WithIgnoreZeroValue(true))
+```
+
+### `WithSlicesAsSets(bool)`
+Treats all slices as unordered sets (same as adding `hash:"set"` to every slice field).
+```go
+// [1,2,3] and [3,1,2] produce the same hash
+hash, err := hashstruct.Hash(data, hashstruct.WithSlicesAsSets(true))
+```
+
+### `WithUseStringer(bool)`
+Uses `String()` method for any field implementing `fmt.Stringer`.
+```go
+// All fmt.Stringer fields use their String() representation
+hash, err := hashstruct.Hash(data, hashstruct.WithUseStringer(true))
+```
+
 ## Struct Tags Reference
 
 You can control how struct fields are hashed using struct tags. The default tag name is `hash`, but this can be changed using the `WithTagName` option.
@@ -108,6 +156,10 @@ type User struct {
 ```
 
 ### Available Tags
+
+**⚠️ Important:** Only use the exact tag values listed below. Prefixes like `name:` are not supported and will break tag functionality. For example, `hash:"name:ClientTypes,set"` will NOT work as a set - use `hash:"set"` instead.
+
+### Tag Reference
 
 #### `ignore` or `-`
 
@@ -271,5 +323,6 @@ func (c Config) HashIncludeMap(field string, k, v any) (bool, error) {
 ## Difference from parent project
 
 Based on https://github.com/mitchellh/hashstructure.
-This library returns `[]byte` SHA256 hashes instead of `uint64` values,
-providing better collision resistance and cryptographic properties.
+This library returns `[]byte` SHA256 hashes by default instead of `uint64` values,
+providing better collision resistance and cryptographic properties. In addition,
+this library supports custom hash functions.
