@@ -141,74 +141,43 @@ func isKnownTag(part string) bool {
 	}
 }
 
-// parseTag parses a struct tag value and returns the parsed information.
-//
-//nolint:exhaustruct // ok in this case
-func parseTag(tag string) parsedTagInfo {
-	if tag == "" {
-		return parsedTagInfo{}
+// parseSingleTag handles a single tag part and updates the result.
+func parseSingleTag(part string, result *parsedTagInfo) {
+	// Check for name=value syntax
+	if strings.HasPrefix(part, "name=") {
+		result.name = part[5:]
+		return
 	}
 
-	// Handle shorthand ignore cases
-	if tag == tagIgnore || tag == tagDash {
-		return parsedTagInfo{ignore: true}
-	}
-
-	result := parsedTagInfo{}
-
-	// Fast path for single values
-	if !strings.Contains(tag, ",") {
-		// Check for name=value syntax
-		if strings.HasPrefix(tag, "name=") {
-			result.name = tag[5:]
-			return result
+	// Handle known tags
+	switch part {
+	case tagIgnore, tagDash:
+		result.ignore = true
+	case tagSet:
+		result.set = true
+	case tagUTC:
+		result.utc = true
+	case tagString:
+		result.string = true
+	default:
+		// If it's not a known tag and we don't have a name yet, treat as shorthand name
+		if !isKnownTag(part) && result.name == "" {
+			result.name = part
 		}
-
-		// Handle single known tags
-		switch tag {
-		case tagIgnore, tagDash:
-			result.ignore = true
-		case tagSet:
-			result.set = true
-		case tagUTC:
-			result.utc = true
-		case tagString:
-			result.string = true
-		default:
-			// Shorthand name syntax
-			result.name = tag
-		}
-		return result
 	}
+}
 
-	// Multiple values - parse comma-separated
+// parseMultipleTags handles comma-separated tag values.
+func parseMultipleTags(tag string) parsedTagInfo {
+	result := parsedTagInfo{} //nolint:exhaustruct // zero values are intended
 	start := 0
+
 	for i := 0; i <= len(tag); i++ {
 		if i == len(tag) || tag[i] == ',' {
 			if i > start {
 				part := strings.TrimSpace(tag[start:i])
 				if part != "" {
-					// Check for name=value syntax
-					if strings.HasPrefix(part, "name=") {
-						result.name = part[5:]
-					} else {
-						// Handle known tags
-						switch part {
-						case tagIgnore, tagDash:
-							result.ignore = true
-						case tagSet:
-							result.set = true
-						case tagUTC:
-							result.utc = true
-						case tagString:
-							result.string = true
-						default:
-							// If it's not a known tag and we don't have a name yet, treat as shorthand name
-							if !isKnownTag(part) && result.name == "" {
-								result.name = part
-							}
-						}
-					}
+					parseSingleTag(part, &result)
 				}
 			}
 			start = i + 1
@@ -216,6 +185,28 @@ func parseTag(tag string) parsedTagInfo {
 	}
 
 	return result
+}
+
+// parseTag parses a struct tag value and returns the parsed information.
+func parseTag(tag string) parsedTagInfo {
+	if tag == "" {
+		return parsedTagInfo{} //nolint:exhaustruct // zero values are intended
+	}
+
+	// Handle shorthand ignore cases
+	if tag == tagIgnore || tag == tagDash {
+		return parsedTagInfo{ignore: true} //nolint:exhaustruct // only ignore field needed
+	}
+
+	// Fast path for single values
+	if !strings.Contains(tag, ",") {
+		result := parsedTagInfo{} //nolint:exhaustruct // zero values are intended
+		parseSingleTag(tag, &result)
+		return result
+	}
+
+	// Multiple values - parse comma-separated
+	return parseMultipleTags(tag)
 }
 
 // A direct hash calculation used for numeric and bool values.
@@ -658,10 +649,7 @@ func hashUpdateUnordered(a, b []byte) []byte {
 		return a
 	}
 
-	minLen := len(a)
-	if len(b) < minLen {
-		minLen = len(b)
-	}
+	minLen := min(len(a), len(b))
 
 	result := make([]byte, minLen)
 	for i := range minLen {
