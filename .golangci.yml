@@ -196,6 +196,7 @@ linters:
           - unparam
           - whitespace
           - exhaustruct
+          - mnd
         path: _test\.go
     paths:
       - third_party$

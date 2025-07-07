@@ -17,6 +17,8 @@ sending data across the network, caching values locally (de-dup), and so on.
     doesn't affect the hash code but the field itself is still taken into
     account to create the hash value.
 
+  * Use `name` tags to protect hash values from field renaming during refactoring.
+
   * Optionally, specify a custom hash function to optimize for speed, collision
     avoidance for your data set, etc.
 
@@ -146,18 +148,20 @@ You can control how struct fields are hashed using struct tags. The default tag 
 
 ```go
 type User struct {
-    ID       int64     `hash:"ignore"`  // This field won't affect the hash
-    Name     string                     // This field will be included normally
-    Email    string    `hash:"-"`       // Alternative way to ignore a field
-    Tags     []string  `hash:"set"`     // Treat this slice as an unordered set
-    Created  time.Time `hash:"string"`  // Use the String() method for hashing
-    Updated  time.Time `hash:"utc"`     // Convert to UTC before hashing
+    ID       int64     `hash:"ignore"`      // This field won't affect the hash
+    Name     string                         // This field will be included normally
+    Email    string    `hash:"-"`           // Alternative way to ignore a field
+    Tags     []string  `hash:"set"`         // Treat this slice as an unordered set
+    Created  time.Time `hash:"string"`      // Use the String() method for hashing
+    Updated  time.Time `hash:"utc"`         // Convert to UTC before hashing
+    Field1   int       `hash:"name=Field1"` // Override field name in hash
+    Field2   int       `hash:"Field2"`      // Shorthand name override
 }
 ```
 
 ### Available Tags
 
-**⚠️ Important:** Only use the exact tag values listed below. Prefixes like `name:` are not supported and will break tag functionality. For example, `hash:"name:ClientTypes,set"` will NOT work as a set - use `hash:"set"` instead.
+**⚠️ Important:** Use only the exact tag values and syntax listed below. Tags can be combined with commas (e.g., `hash:"name=field,utc"`). Note that `name:` (with colon) is not supported - use `name=` (with equals) instead.
 
 ### Tag Reference
 
@@ -241,6 +245,39 @@ event2 := Event{Name: "Meeting", Timestamp: est}
 - Ensuring consistent hashing across systems in different regions
 
 **Note:** If a field has the `utc` tag but is not of type `time.Time`, the Hash function will return a `NotTimeError`.
+
+#### `name=<fieldname>` or `<fieldname>`
+
+Override the field name used in the hash calculation. This protects against field renaming during refactoring.
+
+```go
+type MyStruct struct {
+    Field1 int `hash:"name=Field1"` // Explicit syntax
+    Field2 int `hash:"Field2"`      // Shorthand syntax
+}
+
+// After refactoring field names, hash remains the same:
+type MyStruct struct {
+    RenamedField1 int `hash:"name=Field1"` // Same hash as before
+    RenamedField2 int `hash:"Field2"`      // Same hash as before
+}
+```
+
+**Use cases:**
+- Protecting against field renaming during refactoring
+- Maintaining backward compatibility when evolving struct definitions
+- Consistent hashing across different versions of a struct
+
+**Important:** Multiple fields cannot use the same hash field name - this will cause an error.
+
+#### Combining with Other Tags
+
+```go
+type Event struct {
+    Date time.Time `hash:"name=eventDate,utc"` // Custom name + UTC conversion
+    Tags []string  `hash:"categories,set"`     // Shorthand name + set behavior
+}
+```
 
 ### Advanced Examples
 
