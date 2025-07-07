@@ -6,6 +6,7 @@ import (
 	"hash"
 	"io"
 	"reflect"
+	"strings"
 	"time"
 )
 
@@ -29,10 +30,13 @@ import (
 //
 //	struct {
 //	    Name     string
-//	    UUID     string   `hash:"ignore"`
-//	    Tags     []string `hash:"set"`
-//	    Created  time.Time `hash:"string"`
-//	    Updated  time.Time `hash:"utc"`
+//	    UUID     string     `hash:"ignore"`
+//	    Tags     []string   `hash:"set"`
+//	    Created  time.Time  `hash:"string"`
+//	    Updated  time.Time  `hash:"utc"`
+//	    Field1   int        `hash:"name=FieldOne"`
+//	    Field2   int        `hash:"FieldTwo"`
+//	    Date     time.Time  `hash:"eventDate,utc"`
 //	}
 //
 // The available tag values are:
@@ -50,6 +54,15 @@ import (
 //   - "utc" - The field will be converted to UTC before hashing. This only works
 //     for time.Time fields. This is useful when you want times in different
 //     timezones that represent the same moment to produce the same hash.
+//
+//   - "name=<fieldname>" or just "<fieldname>" - Override the field name used in the hash.
+//     This allows you to rename struct fields without changing the hash value.
+//     For example, `hash:"name=Field1"` or `hash:"Field1"` will use "Field1" as the
+//     field name in the hash regardless of the actual Go field name. This is useful
+//     for protecting against field renaming during refactoring. Multiple fields cannot
+//     use the same hash field name - this will cause an error.
+//
+// Tags can be combined with commas, for example: `hash:"name=eventDate,utc"`.
 func Hash(v any, options ...Option) ([]byte, error) {
 	// Create default config
 	cfg := defaultConfig()
@@ -104,9 +117,106 @@ const (
 	tagSet    = "set"
 	tagDash   = "-"
 	tagUTC    = "utc"
+	tagName   = "name"
 )
 
 var timeType = reflect.TypeOf(time.Time{}) //nolint:gochecknoglobals // ok
+
+// parsedTagInfo holds the parsed tag information.
+type parsedTagInfo struct {
+	name   string
+	ignore bool
+	set    bool
+	utc    bool
+	string bool
+}
+
+// isKnownTag checks if a tag part is a known tag without allocations.
+func isKnownTag(part string) bool {
+	switch part {
+	case tagIgnore, tagString, tagSet, tagDash, tagUTC:
+		return true
+	default:
+		return false
+	}
+}
+
+// parseTag parses a struct tag value and returns the parsed information.
+//
+//nolint:exhaustruct // ok in this case
+func parseTag(tag string) parsedTagInfo {
+	if tag == "" {
+		return parsedTagInfo{}
+	}
+
+	// Handle shorthand ignore cases
+	if tag == tagIgnore || tag == tagDash {
+		return parsedTagInfo{ignore: true}
+	}
+
+	result := parsedTagInfo{}
+
+	// Fast path for single values
+	if !strings.Contains(tag, ",") {
+		// Check for name=value syntax
+		if strings.HasPrefix(tag, "name=") {
+			result.name = tag[5:]
+			return result
+		}
+
+		// Handle single known tags
+		switch tag {
+		case tagIgnore, tagDash:
+			result.ignore = true
+		case tagSet:
+			result.set = true
+		case tagUTC:
+			result.utc = true
+		case tagString:
+			result.string = true
+		default:
+			// Shorthand name syntax
+			result.name = tag
+		}
+		return result
+	}
+
+	// Multiple values - parse comma-separated
+	start := 0
+	for i := 0; i <= len(tag); i++ {
+		if i == len(tag) || tag[i] == ',' {
+			if i > start {
+				part := strings.TrimSpace(tag[start:i])
+				if part != "" {
+					// Check for name=value syntax
+					if strings.HasPrefix(part, "name=") {
+						result.name = part[5:]
+					} else {
+						// Handle known tags
+						switch part {
+						case tagIgnore, tagDash:
+							result.ignore = true
+						case tagSet:
+							result.set = true
+						case tagUTC:
+							result.utc = true
+						case tagString:
+							result.string = true
+						default:
+							// If it's not a known tag and we don't have a name yet, treat as shorthand name
+							if !isKnownTag(part) && result.name == "" {
+								result.name = part
+							}
+						}
+					}
+				}
+			}
+			start = i + 1
+		}
+	}
+
+	return result
+}
 
 // A direct hash calculation used for numeric and bool values.
 func (w *walker) hashDirect(v any) ([]byte, error) {
@@ -372,52 +482,61 @@ func (w *walker) visitSlice(v reflect.Value, opts *visitOpts) ([]byte, error) {
 	return h, nil
 }
 
-func (w *walker) processStructField(
+func (w *walker) processStructField( //nolint:revive // ok in this case
 	v reflect.Value, i int, structType reflect.Type, include Includable, parent any,
-) (fieldHash []byte, shouldInclude bool, err error) {
+) (fieldHash []byte, shouldInclude bool, fieldName string, err error) {
 	innerV := v.Field(i)
 	fieldType := structType.Field(i)
 
 	if fieldType.PkgPath != "" {
 		// Unexported field
-		return nil, false, nil
+		return nil, false, "", nil
 	}
 
 	tag := fieldType.Tag.Get(w.tag)
-	if tag == tagIgnore || tag == tagDash {
+	parsedTag := parseTag(tag)
+
+	if parsedTag.ignore {
 		// Ignore this field
-		return nil, false, nil
+		return nil, false, "", nil
 	}
 
 	if w.ignorezerovalue && innerV.IsZero() {
-		return nil, false, nil
+		return nil, false, "", nil
+	}
+
+	// Determine the field name to use for hashing
+	if parsedTag.name != "" {
+		fieldName = parsedTag.name
+	} else {
+		fieldName = fieldType.Name
 	}
 
 	// if utc is set, convert time.Time to UTC
-	if tag == tagUTC {
+	if parsedTag.utc {
 		if innerV.Type() != timeType {
 			// We only show this error if the tag explicitly
 			// requests UTC conversion.
-			return nil, false, &NotTimeError{
+			return nil, false, "", &NotTimeError{
 				Field: v.Type().Field(i).Name,
 			}
 		}
 		timeVal, ok := innerV.Interface().(time.Time)
 		if !ok {
-			return nil, false, fmt.Errorf("expected time.Time but got %T", innerV.Interface())
+			return nil, false, "", fmt.Errorf("expected time.Time but got %T", innerV.Interface())
 		}
 		// Convert to UTC and replace the value
 		innerV = reflect.ValueOf(timeVal.UTC())
 	}
 
 	// if string is set, use the string value
-	if tag == tagString || w.stringer {
+	if parsedTag.string || w.stringer {
 		if impl, ok := innerV.Interface().(fmt.Stringer); ok {
 			innerV = reflect.ValueOf(impl.String())
-		} else if tag == tagString {
+		} else if parsedTag.string {
 			// We only show this error if the tag explicitly
 			// requests a stringer.
-			return nil, false, &NotStringerError{
+			return nil, false, "", &NotStringerError{
 				Field: v.Type().Field(i).Name,
 			}
 		}
@@ -427,21 +546,21 @@ func (w *walker) processStructField(
 	if include != nil {
 		incl, includeErr := include.HashInclude(fieldType.Name, innerV)
 		if includeErr != nil {
-			return nil, false, includeErr
+			return nil, false, "", includeErr
 		}
 		if !incl {
-			return nil, false, nil
+			return nil, false, "", nil
 		}
 	}
 
 	var f visitFlag
-	if tag == tagSet {
+	if parsedTag.set {
 		f |= visitFlagSet
 	}
 
-	kh, keyErr := w.visit(reflect.ValueOf(fieldType.Name), nil)
+	kh, keyErr := w.visit(reflect.ValueOf(fieldName), nil)
 	if keyErr != nil {
-		return nil, false, keyErr
+		return nil, false, "", keyErr
 	}
 
 	vh, valueErr := w.visit(innerV, &visitOpts{
@@ -450,11 +569,11 @@ func (w *walker) processStructField(
 		StructField: fieldType.Name,
 	})
 	if valueErr != nil {
-		return nil, false, valueErr
+		return nil, false, "", valueErr
 	}
 
 	fieldHash = hashUpdateOrdered(w.h, kh, vh)
-	return fieldHash, true, nil
+	return fieldHash, true, fieldName, nil
 }
 
 func (w *walker) visitStruct(v reflect.Value, _ *visitOpts) ([]byte, error) {
@@ -488,14 +607,23 @@ func (w *walker) visitStruct(v reflect.Value, _ *visitOpts) ([]byte, error) {
 		return nil, err
 	}
 
+	// Track field names to detect duplicates
+	usedNames := make(map[string]string)
+
 	l := v.NumField()
 	for i := range l {
 		if v.CanSet() || structType.Field(i).Name != "_" {
-			fieldHash, shouldInclude, fieldErr := w.processStructField(v, i, structType, include, parent)
+			fieldHash, shouldInclude, fieldName, fieldErr := w.processStructField(v, i, structType, include, parent)
 			if fieldErr != nil {
 				return nil, fieldErr
 			}
 			if shouldInclude {
+				// Check for duplicate field names
+				if existingField, exists := usedNames[fieldName]; exists {
+					return nil, fmt.Errorf("duplicate hash field name '%s' found in fields '%s' and '%s'",
+						fieldName, existingField, structType.Field(i).Name)
+				}
+				usedNames[fieldName] = structType.Field(i).Name
 				h = hashUpdateOrdered(w.h, h, fieldHash)
 			}
 		}

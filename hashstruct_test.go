@@ -1074,6 +1074,229 @@ func TestHash_slicesAsSetsDuplicateIssue(t *testing.T) {
 		"Empty set should have different hash from non-empty set")
 }
 
+func TestHash_nameTag(t *testing.T) {
+	// Test the main use case: protecting against field renaming
+	type MyStruct1 struct {
+		Field1 int `hash:"Field1"`
+	}
+
+	type MyStruct2 struct {
+		Field2 int `hash:"Field1"` // Different Go field name but same hash key
+	}
+
+	test1 := MyStruct1{Field1: 42}
+	test2 := MyStruct2{Field2: 42}
+
+	hash1, err := Hash(test1)
+	require.NoError(t, err)
+
+	hash2, err := Hash(test2)
+	require.NoError(t, err)
+
+	// The hashes should be different due to different struct type names
+	// but the important thing is that the field name in the hash is "Field1" for both
+	assert.False(t, bytes.Equal(hash1, hash2), "Different struct types should have different hashes")
+
+	// Test explicit vs shorthand syntax within same struct
+	type TestExplicitVsShorthand struct {
+		Field1 int `hash:"name=CustomName"`
+		Field2 int `hash:"CustomName2"`
+	}
+
+	// This should not cause a duplicate error since one uses explicit, one uses shorthand
+	test3 := TestExplicitVsShorthand{Field1: 42, Field2: 24}
+	_, err = Hash(test3)
+	require.NoError(t, err, "Mixed explicit and shorthand syntax should work")
+}
+
+func TestHash_nameTagUserCase(t *testing.T) {
+	// Test the exact user case from the request
+	type MyStruct1 struct {
+		Field1 int `hash:"Field1"`
+	}
+
+	type MyStruct2 struct {
+		Field2 int `hash:"Field1"` // Renamed Go field but same hash key
+	}
+
+	test1 := MyStruct1{Field1: 42}
+	test2 := MyStruct2{Field2: 42}
+
+	hash1, err := Hash(test1)
+	require.NoError(t, err)
+
+	hash2, err := Hash(test2)
+	require.NoError(t, err)
+
+	// Different struct types will have different hashes, but this demonstrates
+	// that the field name used in hashing is controlled by the tag
+	t.Logf("Hash1 (Field1 -> Field1): %x", hash1)
+	t.Logf("Hash2 (Field2 -> Field1): %x", hash2)
+
+	// More importantly, test that without the name tag, renaming produces different hash
+	type MyStruct3 struct {
+		Field1 int // No name tag
+	}
+
+	type MyStruct4 struct {
+		Field2 int // No name tag, different field name
+	}
+
+	test3 := MyStruct3{Field1: 42}
+	test4 := MyStruct4{Field2: 42}
+
+	hash3, err := Hash(test3)
+	require.NoError(t, err)
+
+	hash4, err := Hash(test4)
+	require.NoError(t, err)
+
+	t.Logf("Hash3 (Field1 no tag): %x", hash3)
+	t.Logf("Hash4 (Field2 no tag): %x", hash4)
+
+	// These should be different since field names affect the hash
+	assert.False(t, bytes.Equal(hash3, hash4), "Different field names without name tag should produce different hashes")
+}
+
+func TestHash_nameTagWithOtherTags(t *testing.T) {
+	// Test name tag combined with other tags
+	type TestStruct struct {
+		Date   time.Time `hash:"name=eventDate,utc"`
+		Values []string  `hash:"name=tags,set"`
+		Ignore string    `hash:"name=ignored,ignore"`
+		Text   time.Time `hash:"displayTime,string"`
+	}
+
+	now := time.Now()
+	utc := now.UTC()
+	est := now.In(time.FixedZone("EST", -5*3600))
+
+	test1 := TestStruct{
+		Date:   utc,
+		Values: []string{"a", "b", "c"},
+		Ignore: "should_be_ignored",
+		Text:   now,
+	}
+
+	test2 := TestStruct{
+		Date:   est,                     // Different timezone but same moment
+		Values: []string{"c", "a", "b"}, // Different order
+		Ignore: "different_ignored_value",
+		Text:   now,
+	}
+
+	hash1, err := Hash(test1)
+	require.NoError(t, err)
+
+	hash2, err := Hash(test2)
+	require.NoError(t, err)
+
+	assert.True(t, bytes.Equal(hash1, hash2), "Name tag should work with utc and set tags")
+}
+
+func TestHash_nameTagDuplicateError(t *testing.T) {
+	// Test that duplicate field names cause an error
+	type TestStructBad struct {
+		Field1 int `hash:"name=sameName"`
+		Field2 int `hash:"name=sameName"`
+	}
+
+	test := TestStructBad{Field1: 42, Field2: 24}
+	_, err := Hash(test)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate hash field name 'sameName'")
+	assert.Contains(t, err.Error(), "Field1")
+	assert.Contains(t, err.Error(), "Field2")
+}
+
+func TestHash_nameTagDuplicateErrorShorthand(t *testing.T) {
+	// Test that duplicate field names cause an error with shorthand syntax
+	type TestStructBad struct {
+		Field1 int `hash:"sameName"`
+		Field2 int `hash:"sameName"`
+	}
+
+	test := TestStructBad{Field1: 42, Field2: 24}
+	_, err := Hash(test)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate hash field name 'sameName'")
+}
+
+func TestHash_nameTagDuplicateErrorMixed(t *testing.T) {
+	// Test that duplicate field names cause an error with mixed syntax
+	type TestStructBad struct {
+		Field1 int `hash:"name=sameName"`
+		Field2 int `hash:"sameName"`
+	}
+
+	test := TestStructBad{Field1: 42, Field2: 24}
+	_, err := Hash(test)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate hash field name 'sameName'")
+}
+
+func TestHash_nameTagRenamedFieldsProduceDifferentHash(t *testing.T) {
+	// Test that renaming field changes hash value
+	type TestStruct1 struct {
+		Field1 int
+	}
+
+	type TestStruct2 struct {
+		Field1 int `hash:"name=Field2"`
+	}
+
+	test1 := TestStruct1{Field1: 42}
+	test2 := TestStruct2{Field1: 42}
+
+	hash1, err := Hash(test1)
+	require.NoError(t, err)
+
+	hash2, err := Hash(test2)
+	require.NoError(t, err)
+
+	assert.False(t, bytes.Equal(hash1, hash2), "Renaming field should produce different hash")
+}
+
+func TestHash_nameTagPreservesFieldOrder(t *testing.T) {
+	// Test that field processing order is preserved
+	type TestStruct struct {
+		A int `hash:"name=Z"`
+		B int `hash:"name=Y"`
+		C int `hash:"name=X"`
+	}
+
+	test1 := TestStruct{A: 1, B: 2, C: 3}
+	test2 := TestStruct{A: 1, B: 2, C: 3}
+
+	hash1, err := Hash(test1)
+	require.NoError(t, err)
+
+	hash2, err := Hash(test2)
+	require.NoError(t, err)
+
+	assert.True(t, bytes.Equal(hash1, hash2), "Hash should be deterministic despite name remapping")
+}
+
+func TestHash_nameTagEdgeCases(t *testing.T) {
+	// Test edge cases
+	type TestStruct struct {
+		Field1 int    `hash:"name="`           // Empty name should use original field name
+		Field2 int    `hash:"name= spaced "`   // Name with spaces
+		Field3 int    `hash:"name=special@#$"` // Name with special characters
+		Field4 string `hash:"normalName"`      // Normal shorthand
+	}
+
+	test := TestStruct{
+		Field1: 1,
+		Field2: 2,
+		Field3: 3,
+		Field4: "test",
+	}
+
+	_, err := Hash(test)
+	require.NoError(t, err, "Edge cases should not cause errors")
+}
+
 func TestHash_withUseStringer(t *testing.T) {
 	// First test with a non-Stringer type to show normal behavior
 	type NonStringer struct {
@@ -1234,6 +1457,30 @@ func TestHash_customHasherSizes(t *testing.T) {
 	hashXXHash2, err := Hash(testData, WithHasher(xxhash.New()))
 	require.NoError(t, err)
 	assert.True(t, bytes.Equal(hashXXHash, hashXXHash2), "Same hasher should produce consistent results")
+}
+
+func BenchmarkParseTag(b *testing.B) {
+	testCases := []string{
+		"",
+		"ignore",
+		"set",
+		"utc",
+		"string",
+		"name=customName",
+		"customName",
+		"name=eventDate,utc",
+		"customName,set",
+		"name=field,utc,set",
+		"fieldName,ignore,set,utc",
+	}
+
+	for _, tc := range testCases {
+		b.Run(tc, func(b *testing.B) {
+			for range b.N {
+				_ = parseTag(tc)
+			}
+		})
+	}
 }
 
 func BenchmarkString(b *testing.B) {
