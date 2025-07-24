@@ -534,6 +534,48 @@ func TestHash_equalSet(t *testing.T) {
 	}
 }
 
+func TestHash_equalSetPointer(t *testing.T) {
+	type Test struct {
+		Name    string
+		Friends []*int `hash:"set"`
+	}
+
+	intToPtrFn := func(i int) *int {
+		return &i
+	}
+
+	cases := []struct {
+		One, Two any
+		Match    bool
+	}{
+		{
+			Test{Name: "foo", Friends: []*int{intToPtrFn(1), intToPtrFn(2)}},
+			Test{Name: "foo", Friends: []*int{intToPtrFn(2), intToPtrFn(1)}},
+			true,
+		},
+
+		{
+			Test{Name: "foo", Friends: []*int{intToPtrFn(1), intToPtrFn(2)}},
+			Test{Name: "foo", Friends: []*int{intToPtrFn(1), intToPtrFn(2)}},
+			true,
+		},
+	}
+
+	for _, tc := range cases {
+		one, err := Hash(tc.One)
+		require.NoError(t, err, "Failed to hash %#v: %s", tc.One, err)
+
+		two, err := Hash(tc.Two)
+		require.NoError(t, err, "Failed to hash %#v: %s", tc.Two, err)
+
+		// Zero is always wrong
+		assert.NotEmpty(t, one, "zero hash: %#v", tc.One)
+
+		// Compare
+		assert.Equal(t, tc.Match, bytes.Equal(one, two), "bad, expected: %#v\n\n%#v\n\n%#v", tc.Match, tc.One, tc.Two)
+	}
+}
+
 func TestHash_includable(t *testing.T) {
 	cases := []struct {
 		One, Two any
